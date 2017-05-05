@@ -1,1 +1,1 @@
-..\bin\TestWinGlut.exe -il ..\data\listx.txt
+..\bin\Win32\TestWin.exe -il ..\data\listx.txt
