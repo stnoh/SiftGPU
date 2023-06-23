@@ -13,13 +13,18 @@ namespace py = pybind11;
 ///////////////////////////////////////////////////////////////////////////////
 void create(int nfeatures, int nOctaveLayers, 
 			float contrastThreshold, float edgeThreshold, bool existGL);
-py::array detectAndCompute(const py::array& image);
+py::object detectAndCompute(const py::array& image);
 void empty(); // destructor?
+
+py::array match(const py::array& desc1, const py::array& desc2, 
+	float distmax, float ratiomax);
 
 
 ///////////////////////////////////////////////////////////////////////////////
 // unnamed namespace for data sealing
 ///////////////////////////////////////////////////////////////////////////////
+
+#define FREE(obj) { if (NULL != obj) { delete obj; obj = NULL; } }
 
 //define this to get dll import definition for win32
 #define SIFTGPU_DLL_RUNTIME
@@ -55,8 +60,11 @@ void empty(); // destructor?
 #include <GL/GL.h>
 
 namespace {
-HMODULE  hsiftgpu;
-SiftGPU* sift;
+HMODULE hsiftgpu = NULL;
+SiftGPU      *sift    = NULL;
+SiftMatchGPU *matcher = NULL;
+
+int (*match_buf)[2];
 
 int   _nfeatures;
 bool  _init_sift = false;
@@ -90,8 +98,11 @@ void create(int nfeatures, int nOctaveLayers,
 	SiftGPU* (*pCreateNewSiftGPU)(int) = NULL;
 	SiftMatchGPU* (*pCreateNewSiftMatchGPU)(int) = NULL;
 	pCreateNewSiftGPU = (SiftGPU* (*) (int)) GET_MYPROC(hsiftgpu, "CreateNewSiftGPU");
+	pCreateNewSiftMatchGPU = (SiftMatchGPU* (*)(int)) GET_MYPROC(hsiftgpu, "CreateNewSiftMatchGPU");
 
-	sift = pCreateNewSiftGPU(1);
+	sift    = pCreateNewSiftGPU(1);
+	matcher = pCreateNewSiftMatchGPU(_nfeatures);
+	match_buf = new int[_nfeatures][2];
 
 	// parse and set arguments
 	std::vector<char*> argv;
@@ -155,11 +166,11 @@ void create(int nfeatures, int nOctaveLayers,
 	}
 }
 
-py::array detectAndCompute(const py::array& image)
+py::object detectAndCompute(const py::array& image)
 {
 	if (!_init_sift)
 	{
-		py::print("abort: GPUSift is not initialized.");
+		py::print("abort: SiftGPU is not initialized.");
 		return make_tuple(py::none(), py::none());
 	}
 
@@ -201,8 +212,8 @@ py::array detectAndCompute(const py::array& image)
 		return make_tuple(py::none(), py::none());
 	}
 
-	py::array_t<SiftKeypoint> keypoints;
-	py::array_t<float> descriptors;
+	py::array keypoints;
+	py::array descriptors;
 
 	if (_existGL) wglMakeCurrent(g_hdc, m_hglrc); // set GL context for SiftGPU
 	sift->VerifyContextGL();
@@ -219,14 +230,14 @@ py::array detectAndCompute(const py::array& image)
 			return make_tuple(py::none(), py::none());
 		}
 
-		keypoints   = py::array_t<SiftKeypoint>(num);
-		descriptors = py::array_t<float>(num << 7);
+		keypoints = py::array_t<SiftKeypoint>(num);
+		py::array _descriptors = py::array_t<float>(num << 7);
 		
-		sift->GetFeatureVector((SiftKeypoint*)keypoints.request().ptr, (float*)descriptors.request().ptr); // copy data
+		sift->GetFeatureVector((SiftKeypoint*)keypoints.request().ptr, (float*)_descriptors.request().ptr); // copy data
 
 		// [FIX ME LATER] conversion from SiftKeypoint
 
-		//descriptors.resize({num, 128}); // [FIX ME LATER] convert descriptor[num*128] -> descriptor[num,128]
+		descriptors = _descriptors.reshape({num, 128}); // convert 1D [num*128] -> 2D [num,128]
 	}
 
 	if (_existGL) wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
@@ -242,11 +253,75 @@ py::array detectAndCompute(const py::array& image)
 void empty()
 {
 	if (_init_sift) {
-		_init_sift = false;
+		FREE(sift);
+		FREE(matcher);
+		FREE(match_buf);
 
-		delete sift; sift = NULL;
-		FREE_MYLIB(hsiftgpu);
+		_init_sift = false;
 	}
+
+	if (NULL != hsiftgpu) {
+		FREE_MYLIB(hsiftgpu);
+		hsiftgpu = NULL;
+	}
+}
+
+py::array match(const py::array& desc0, const py::array& desc1,
+				float distmax, float ratiomax)
+{
+	if (NULL == matcher)
+	{
+		py::print("abort: SiftMatchGPU is not initialized.");
+		return py::none();
+	}
+
+	// check the descriptor shape
+	size_t desc0_dim = desc0.ndim();
+	size_t desc1_dim = desc1.ndim();
+	if (desc0_dim != 2 || desc1_dim != 2) {
+		py::print("abort: invalid descriptor");
+		return py::none();
+	}
+	if (desc0.shape(1) != 128 || desc1.shape(1) != 128) {
+		py::print("abort: invalid descriptor");
+		return py::none();
+	}
+
+	int num_desc0 = desc0.shape(0);
+	int num_desc1 = desc1.shape(0);
+
+	if (num_desc0 <= 0 || num_desc1 <= 0) {
+		py::print("abort: invalid size of descriptor");
+		return py::none();
+	}
+
+	if (_existGL) wglMakeCurrent(g_hdc, m_hglrc); // set GL context for SiftGPU
+	matcher->VerifyContextGL();
+
+	// run matcher
+	matcher->SetDescriptors(0, num_desc0, (const float *)desc0.request().ptr);
+	matcher->SetDescriptors(1, num_desc1, (const float *)desc1.request().ptr);
+
+	int num_min = min(num_desc0, num_desc1);
+	int num_match = matcher->GetSiftMatch(num_min, match_buf, distmax, ratiomax);
+
+	if (_existGL) wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
+
+	// conversion for python
+	py::array_t<int> match0 = py::array_t<int>(num_match);
+	py::array_t<int> match1 = py::array_t<int>(num_match);
+	int *match0_ptr = static_cast<int*>(match0.request().ptr);
+	int *match1_ptr = static_cast<int*>(match1.request().ptr);
+
+	for (int n = 0; n < num_match; n++)
+	{
+		//py::print(match_buf[n][0], " - ", match_buf[n][1]);
+
+		match0_ptr[n] = match_buf[n][0];
+		match1_ptr[n] = match_buf[n][1];
+	}
+
+	return make_tuple(match0, match1);
 }
 
 
@@ -261,21 +336,22 @@ PYBIND11_MODULE(pySiftGPU, m) {
 
     m.def("create", &create, 
 		py::arg("nfeatures")=4096, py::arg("nOctaveLayers")=3,
-		py::arg("contrastThreshold")=0.0147, py::arg("edgeThreshold")=10.0,
+		py::arg("contrastThreshold")=0.01472, py::arg("edgeThreshold")=10.0,
 		py::arg("existGL")=false,
 		R"pbdoc(
 		  (Re)initialize SiftGPU module.
           arg0: maximum number of feature points handled by this module (int).
                 if set to zero, this module handles all points. default is 4096 (maximum).
           arg1: the number of octave inside of this module (int). default is 3.
-          arg2: parameter for ... (float). default is 0.01472 .
-          arg3: parameter for ... (float). default is 10.0 .
+          arg2: parameter for contrast threshold (float). default is 0.01472 .
+          arg3: parameter for edge threshold (float). default is 10.0 .
           arg4: if there is GL context, use that GL for GLSL. default is False.
           )pbdoc");
 
-    m.def("detectAndCompute", &detectAndCompute, 
+    m.def("detectAndCompute", &detectAndCompute,
 		py::arg("image"),
 		R"pbdoc(
+          arg1: grayscale image. Should be 2-dimensional numpy array (H, W).
 		  detect Sift keypoints and compute their descriptors.
           )pbdoc");
 
@@ -284,7 +360,30 @@ PYBIND11_MODULE(pySiftGPU, m) {
           remove SiftGPU module.
           )pbdoc");
 
+	m.def("match", &match,
+		py::arg("desc0"),
+		py::arg("desc1"),
+		py::arg("distmax") = 0.70f,
+		py::arg("ratiomax") = 0.80f,
+		R"pbdoc(
+          get brute-force matching with GPU
+          arg1: descriptor #0. Should be 2-dimensional numpy array (N, 128).
+          arg2: descriptor #1. Should be 2-dimensional numpy array (M, 128).
+          arg2: max distance for matching (float). default is 0.70 .
+          arg3: max ratio for matching (float). default is 0.80 .
+          )pbdoc");
+
 	PYBIND11_NUMPY_DTYPE(SiftKeypoint, x, y, s, o); // [FIX ME LATER]
+
+	// [FIX ME LATER]
+	/*
+	py::class_<SiftKeypoint>(m, "SiftKeypoint")
+		.def(py::init())
+		.def_readwrite("x", &SiftKeypoint::x)
+		.def_readwrite("y", &SiftKeypoint::y)
+		.def_readwrite("s", &SiftKeypoint::s)
+		.def_readwrite("o", &SiftKeypoint::o);
+	//*/
 
 #ifdef VERSION_INFO
     m.attr("__version__") = VERSION_INFO;
