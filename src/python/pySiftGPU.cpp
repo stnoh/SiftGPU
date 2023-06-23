@@ -93,14 +93,38 @@ void create(int nfeatures, int nOctaveLayers,
 
 	sift = pCreateNewSiftGPU(1);
 
-	// set arguments
+	// parse and set arguments
 	std::vector<char*> argv;
 
 	argv.push_back((char*)"-fo"); // feature octave
 	argv.push_back((char*)"-1");
-	
+
+	argv.push_back((char*)"-tc");
+	char buf_tc[128];
+	sprintf_s(buf_tc, 128, "%d", _nfeatures);
+	argv.push_back(buf_tc);
+
+	argv.push_back((char*)"-d");
+	char buf_d[128];
+	sprintf_s(buf_d, 128, "%d", nOctaveLayers);
+	argv.push_back(buf_d);
+
+	argv.push_back((char*)"-t"); // contrast threshold
+	char buf_t[128];
+	sprintf_s(buf_t, 128, "%f", contrastThreshold);
+	argv.push_back(buf_t);
+
+	argv.push_back((char*)"-e");
+	char buf_e[128];
+	sprintf_s(buf_e, 128, "%f", edgeThreshold);
+	argv.push_back(buf_e);
+
 	argv.push_back((char*)"-v"); // verbose
 	argv.push_back((char*)"0");
+	argv.push_back((char*)"-noprep");
+	//argv.push_back((char*)"-unn"); // un-normalized descriptor
+
+	//py::print(argv); // check arguments
 
 	int argc = (int)argv.size();
 	sift->ParseParam(argc, &argv[0]);
@@ -177,6 +201,9 @@ py::array detectAndCompute(const py::array& image)
 		return make_tuple(py::none(), py::none());
 	}
 
+	py::array_t<SiftKeypoint> keypoints;
+	py::array_t<float> descriptors;
+
 	if (_existGL) wglMakeCurrent(g_hdc, m_hglrc); // set GL context for SiftGPU
 	sift->VerifyContextGL();
 
@@ -185,16 +212,21 @@ py::array detectAndCompute(const py::array& image)
 
 	if (succeeded)
 	{
-		int num = min(sift->GetFeatureNum(), _nfeatures);
+		int num = sift->GetFeatureNum();
 
 		if (num <= 0) {
 			py::print("abort: no feature is extracted.");
 			return make_tuple(py::none(), py::none());
 		}
 
-		py::print(num);
+		keypoints   = py::array_t<SiftKeypoint>(num);
+		descriptors = py::array_t<float>(num << 7);
+		
+		sift->GetFeatureVector((SiftKeypoint*)keypoints.request().ptr, (float*)descriptors.request().ptr); // copy data
 
-		//sift->GetFeatureVector(kp_ptr, desc_ptr); // [TODO] copy data
+		// [FIX ME LATER] conversion from SiftKeypoint
+
+		//descriptors.resize({num, 128}); // [FIX ME LATER] convert descriptor[num*128] -> descriptor[num,128]
 	}
 
 	if (_existGL) wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
@@ -203,8 +235,8 @@ py::array detectAndCompute(const py::array& image)
 		py::print("error: cannot run GPUSift.");
 		return make_tuple(py::none(), py::none());
 	}
-	
-	return make_tuple(py::none(), py::none()); // [TODO] output conversion
+
+	return make_tuple(keypoints, descriptors);
 }
 
 void empty()
@@ -229,10 +261,16 @@ PYBIND11_MODULE(pySiftGPU, m) {
 
     m.def("create", &create, 
 		py::arg("nfeatures")=4096, py::arg("nOctaveLayers")=3,
-		py::arg("contrastThreshold")=0.04, py::arg("edgeThreshold")=10.0,
+		py::arg("contrastThreshold")=0.0147, py::arg("edgeThreshold")=10.0,
 		py::arg("existGL")=false,
 		R"pbdoc(
-		  initialize SiftGPU module.
+		  (Re)initialize SiftGPU module.
+          arg0: maximum number of feature points handled by this module (int).
+                if set to zero, this module handles all points. default is 4096 (maximum).
+          arg1: the number of octave inside of this module (int). default is 3.
+          arg2: parameter for ... (float). default is 0.01472 .
+          arg3: parameter for ... (float). default is 10.0 .
+          arg4: if there is GL context, use that GL for GLSL. default is False.
           )pbdoc");
 
     m.def("detectAndCompute", &detectAndCompute, 
@@ -245,6 +283,8 @@ PYBIND11_MODULE(pySiftGPU, m) {
 		R"pbdoc(
           remove SiftGPU module.
           )pbdoc");
+
+	PYBIND11_NUMPY_DTYPE(SiftKeypoint, x, y, s, o); // [FIX ME LATER]
 
 #ifdef VERSION_INFO
     m.attr("__version__") = VERSION_INFO;
