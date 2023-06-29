@@ -64,7 +64,7 @@
       <IntrinsicFunctions>false</IntrinsicFunctions>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <AdditionalIncludeDirectories>../../Include/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NDEBUG;SIFTGPU_EXPORTS;WIN32;_WINDOWS;_USRDLL;SIFTGPU_DLL;DLL_EXPORT;_CRT_SECURE_NO_DEPRECATE;SERVER_SIFTGPU_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SIFTGPU_EXPORTS;SIFTGPU_NO_DEVIL;WIN32;_WINDOWS;SIFTGPU_DLL;DLL_EXPORT;_CRT_SECURE_NO_DEPRECATE;SERVER_SIFTGPU_ENABLED;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <IgnoreStandardIncludePath>false</IgnoreStandardIncludePath>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -109,7 +109,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>../../Include/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_DEBUG;DLL_EXPORT;WIN32;_WINDOWS;_USRDLL;SIFTGPU_DLL;_CRT_SECURE_NO_DEPRECATE;SERVER_SIFTGPU_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SIFTGPU_EXPORTS;SIFTGPU_NO_DEVIL;WIN32;_WINDOWS;SIFTGPU_DLL;DLL_EXPORT;_CRT_SECURE_NO_DEPRECATE;SERVER_SIFTGPU_ENABLED;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <IgnoreStandardIncludePath>false</IgnoreStandardIncludePath>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
