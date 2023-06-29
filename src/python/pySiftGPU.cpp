@@ -26,30 +26,8 @@ py::array match(const py::array& desc1, const py::array& desc2,
 
 #define FREE(obj) { if (NULL != obj) { delete obj; obj = NULL; } }
 
-//define this to get dll import definition for win32
-#define SIFTGPU_DLL_RUNTIME
-
 #ifdef _WIN32
-    #ifdef SIFTGPU_DLL_RUNTIME
-        #define WIN32_LEAN_AND_MEAN
-        #include <windows.h>
-        #define FREE_MYLIB FreeLibrary
-        #define GET_MYPROC GetProcAddress
-    #else
-        //define this to get dll import definition for win32
-        #define SIFTGPU_DLL
-        #ifdef _DEBUG 
-            #pragma comment(lib, "../../lib/siftgpu_d.lib")
-        #else
-            #pragma comment(lib, "../../lib/siftgpu.lib")
-        #endif
-    #endif
-#else
-    #ifdef SIFTGPU_DLL_RUNTIME
-        #include <dlfcn.h>
-        #define FREE_MYLIB dlclose
-        #define GET_MYPROC dlsym
-    #endif
+#include <Windows.h>
 #endif
 
 
@@ -60,7 +38,6 @@ py::array match(const py::array& desc1, const py::array& desc2,
 #include <GL/GL.h>
 
 namespace {
-HMODULE hsiftgpu = NULL;
 SiftGPU      *sift    = NULL;
 SiftMatchGPU *matcher = NULL;
 
@@ -70,9 +47,11 @@ int   _nfeatures;
 bool  _init_sift = false;
 bool  _existGL;
 
+#ifdef _WIN32
 HDC   g_hdc;
 HGLRC g_hglrc;
 HGLRC m_hglrc;
+#endif
 }
 
 
@@ -88,20 +67,10 @@ void create(int nfeatures, int nOctaveLayers,
 	_nfeatures = nfeatures;
 	_existGL   = existGL;
 
-	// load SiftGPU.dll
-	hsiftgpu = LoadLibrary("SiftGPU.dll");
-	if (hsiftgpu == NULL) {
-		py::print("abort: cannot find SiftGPU.dll");
-		return;
-	}
+	// load SiftGPU objects
+	sift    = new SiftGPU(1);
+	matcher = new SiftMatchGPU(_nfeatures);
 
-	SiftGPU* (*pCreateNewSiftGPU)(int) = NULL;
-	SiftMatchGPU* (*pCreateNewSiftMatchGPU)(int) = NULL;
-	pCreateNewSiftGPU = (SiftGPU* (*) (int)) GET_MYPROC(hsiftgpu, "CreateNewSiftGPU");
-	pCreateNewSiftMatchGPU = (SiftMatchGPU* (*)(int)) GET_MYPROC(hsiftgpu, "CreateNewSiftMatchGPU");
-
-	sift    = pCreateNewSiftGPU(1);
-	matcher = pCreateNewSiftMatchGPU(_nfeatures);
 	match_buf = new int[_nfeatures][2];
 
 	// parse and set arguments
@@ -132,7 +101,7 @@ void create(int nfeatures, int nOctaveLayers,
 
 	argv.push_back((char*)"-v"); // verbose
 	argv.push_back((char*)"0");
-	argv.push_back((char*)"-noprep");
+	//argv.push_back((char*)"-noprep");
 	//argv.push_back((char*)"-unn"); // un-normalized descriptor
 
 	//py::print(argv); // check arguments
@@ -145,17 +114,21 @@ void create(int nfeatures, int nOctaveLayers,
 	// set rendering context for GPUSift
 	if (_existGL) {
 		// preserve & create GL rendering context
+#ifdef _WIN32
 		g_hdc   = wglGetCurrentDC();
 		g_hglrc = wglGetCurrentContext();
 		m_hglrc = wglCreateContext(g_hdc);
 
 		wglMakeCurrent(g_hdc, m_hglrc); // set GL context
+#endif
 		if (sift->VerifyContextGL() != SiftGPU::SIFTGPU_FULL_SUPPORTED)
 		{
 			_init_sift = false;
 			py::print("abort: SIFTGPU Initialization failed..\n");
 		}
+#ifdef _WIN32
 		wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
+#endif
 	}
 	else {
 		if (sift->CreateContextGL() != SiftGPU::SIFTGPU_FULL_SUPPORTED)
@@ -215,7 +188,9 @@ py::object detectAndCompute(const py::array& image)
 	py::array keypoints;
 	py::array descriptors;
 
+#ifdef _WIN32
 	if (_existGL) wglMakeCurrent(g_hdc, m_hglrc); // set GL context for SiftGPU
+#endif
 	sift->VerifyContextGL();
 
 	// copy image & run SiftGPU
@@ -240,7 +215,9 @@ py::object detectAndCompute(const py::array& image)
 		descriptors = _descriptors.reshape({num, 128}); // convert 1D [num*128] -> 2D [num,128]
 	}
 
+#ifdef _WIN32
 	if (_existGL) wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
+#endif
 
 	if (!succeeded) {
 		py::print("error: cannot run GPUSift.");
@@ -258,11 +235,6 @@ void empty()
 		FREE(match_buf);
 
 		_init_sift = false;
-	}
-
-	if (NULL != hsiftgpu) {
-		FREE_MYLIB(hsiftgpu);
-		hsiftgpu = NULL;
 	}
 }
 
@@ -295,7 +267,9 @@ py::array match(const py::array& desc0, const py::array& desc1,
 		return py::none();
 	}
 
+#ifdef _WIN32
 	if (_existGL) wglMakeCurrent(g_hdc, m_hglrc); // set GL context for SiftGPU
+#endif
 	matcher->VerifyContextGL();
 
 	// run matcher
@@ -305,7 +279,9 @@ py::array match(const py::array& desc0, const py::array& desc1,
 	int num_min = min(num_desc0, num_desc1);
 	int num_match = matcher->GetSiftMatch(num_min, match_buf, distmax, ratiomax);
 
+#ifdef _WIN32
 	if (_existGL) wglMakeCurrent(g_hdc, g_hglrc); // reset GL context
+#endif
 
 	// conversion for python
 	py::array_t<int> match0 = py::array_t<int>(num_match);
